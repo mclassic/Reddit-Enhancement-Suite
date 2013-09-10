@@ -1,5 +1,3 @@
-<!DOCTYPE html>
-<script>
 /*
 
 	RES is released under the GPL. However, I do ask a favor (obviously I don't/can't require it, I ask out of courtesy):
@@ -39,11 +37,11 @@ XHRCache = {
 	count: 0,
 	check: function(key) {
 		if (key in this.entries) {
-//			console.count("hit");
+//				console.count("hit");
 			this.entries[key].hits++;
 			return this.entries[key].data;
 		} else {
-//			console.count("miss");
+//				console.count("miss");
 			return null;
 		}
 	},
@@ -51,7 +49,7 @@ XHRCache = {
 		if (key in this.entries) {
 			return;
 		} else {
-//			console.count("add");
+//				console.count("add");
 			this.entries[key] = {data: value, timestamp: new Date(), hits: 1};
 			this.count++;
 		}
@@ -63,11 +61,11 @@ XHRCache = {
 		var now = new Date();
 		var bottom = [];
 		for (var key in this.entries) {
-//			if (this.entries[key].hits == 1) {
-//				delete this.entries[key];
-//				this.count--;
-//				continue;
-//			}
+//				if (this.entries[key].hits == 1) {
+//					delete this.entries[key];
+//					this.count--;
+//					continue;
+//				}
 
 			//Weight by hits/age which is similar to reddit's hit/controversial sort orders
 			bottom.push({
@@ -81,7 +79,7 @@ XHRCache = {
 			delete this.entries[bottom[i].key];
 			this.count--;
 		}
-//		console.count("prune");
+//			console.count("prune");
 	},
 	clear: function() {
 		this.entries = {};
@@ -89,79 +87,62 @@ XHRCache = {
 	}
 };
 
-opera.extension.addEventListener( "message", function( event ) {
-	// get JSON data (from event.data) using the same format used for chrome/safari extensions
-	var request = JSON.parse(event.data);
-	if ((typeof(request) != 'undefined') && (typeof(request.requestType) != 'undefined')) {
+chrome.extension.onMessage.addListener(
+	function(request, sender, sendResponse) {
 		switch(request.requestType) {
+			case 'deleteCookie':
+				// Get chrome cookie handler
+				if (!chrome.cookies) {
+                    chrome.cookies = chrome.experimental.cookies;
+                }
+				chrome.cookies.remove({'url': 'http://reddit.com', 'name': request.cname});
+				break;
 			case 'GM_xmlhttpRequest':
 				if (request.aggressiveCache || XHRCache.forceCache) {
 					var cachedResult = XHRCache.check(request.url);
 					if (cachedResult) {
-						event.source.postMessage({
-							msgType: 'GM_xmlhttpRequest',
-							XHRID: request.XHRID,
-							data: cachedResult
-						});
+						sendResponse(cachedResult);
 						return;
 					}
 				}
 				var xhr = new XMLHttpRequest();
-				if (typeof(request.data) == 'undefined') {
-					request.data = '';
-				}
 				xhr.open(request.method, request.url, true);
 				if (request.method == "POST") {
 					xhr.setRequestHeader("Content-type", "application/x-www-form-urlencoded");
-					xhr.setRequestHeader("Content-length", request.data.length);
-					xhr.setRequestHeader("Connection", "close");					
 				}
-				xhr.onreadystatechange = function() {
-				  if (xhr.readyState == 4) {
-				// Ugh, frustrating.  Opera won't let me pass back the xhr object, so I have to fake out
-				// my script on the other side by manually passing it back what I need... we'll start with just
-				// responseText, but if I add any functions that need more than that, I'll need to manually add
-				// those bits here...
-					var resp = {
-						status: xhr.status,
-						responseText: xhr.responseText,
-						url: request.url
-					};
-					//Only cache on HTTP OK and non empty body
-					if ((request.aggressiveCache || XHRCache.forceCache) && (xhr.status == 200 && xhr.responseText)) {
-						XHRCache.add(request.url, resp);
+				xhr.onreadystatechange = function(a) {
+					if (xhr.readyState == 4) {
+						//Only store `status` and `responseText` fields
+						var response = {status: xhr.status, responseText: xhr.responseText};
+						sendResponse(response);
+						//Only cache on HTTP OK and non empty body
+						if ((request.aggressiveCache || XHRCache.forceCache) && (xhr.status == 200 && xhr.responseText)) {
+							XHRCache.add(request.url, response);
+						}
 					}
-					var passBack = {
-						msgType: 'GM_xmlhttpRequest',
-						XHRID: request.XHRID,
-						data: resp
-					}
-					event.source.postMessage(passBack);
-				  }
-				}
+				};
 				xhr.send(request.data);
+				return true;
 				break;
 			case 'singleClick':
 				var button = !((request.button == 1) || (request.ctrl == 1));
+				// Get the selected tab so we can get the index of it.  This allows us to open our new tab as the "next" tab.
+				var newIndex = sender.tab.index+1;
 				// handle requests from singleClick module
 				if (request.openOrder == 'commentsfirst') {
 					// only open a second tab if the link is different...
 					if (request.linkURL != request.commentsURL) {
-						opera.extension.tabs.create({url: request.commentsURL, focused: button});
+						chrome.tabs.create({url: request.commentsURL, selected: button, index: newIndex, openerTabId: sender.tab.id});
 					}
-					opera.extension.tabs.create({url: request.linkURL, focused: button});
+					chrome.tabs.create({url: request.linkURL, selected: button, index: newIndex+1, openerTabId: sender.tab.id});
 				} else {
-					opera.extension.tabs.create({url: request.linkURL, focused: button});
+					chrome.tabs.create({url: request.linkURL, selected: button, index: newIndex, openerTabId: sender.tab.id});
 					// only open a second tab if the link is different...
 					if (request.linkURL != request.commentsURL) {
-						opera.extension.tabs.create({url: request.commentsURL, focused: button});
+						chrome.tabs.create({url: request.commentsURL, selected: button, index: newIndex+1, openerTabId: sender.tab.id});
 					}
 				}
-				var passBack = {
-					msgType: 'singleClick',
-					data: { status: 'success' }
-				}
-				event.source.postMessage(passBack);
+				sendResponse({status: "success"});
 				break;
 			case 'keyboardNav':
 				var button = !(request.button == 1);
@@ -169,117 +150,85 @@ opera.extension.addEventListener( "message", function( event ) {
 				thisLinkURL = request.linkURL;
 				if (thisLinkURL.toLowerCase().substring(0,4) != 'http') {
 					(thisLinkURL.substring(0,1) == '/') ? thisLinkURL = 'http://www.reddit.com' + thisLinkURL : thisLinkURL = location.href + thisLinkURL;
-					
 				}
-				opera.extension.tabs.create({url: thisLinkURL, focused: button});
-				var passBack = {
-					msgType: 'keyboardNav',
-					data: { status: 'success' }
-				}
-				event.source.postMessage(passBack);
+				// Get the selected tab so we can get the index of it.  This allows us to open our new tab as the "next" tab.
+				var newIndex = sender.tab.index+1;
+				chrome.tabs.create({url: thisLinkURL, selected: button, index: newIndex, openerTabId: sender.tab.id});
+				sendResponse({status: "success"});
 				break;
 			case 'openLinkInNewTab':
-				var focus = (request.focus == true);
+				var focus = (request.focus === true);
+				// handle requests from keyboardNav module
 				thisLinkURL = request.linkURL;
 				if (thisLinkURL.toLowerCase().substring(0,4) != 'http') {
 					(thisLinkURL.substring(0,1) == '/') ? thisLinkURL = 'http://www.reddit.com' + thisLinkURL : thisLinkURL = location.href + thisLinkURL;
-					
 				}
-				opera.extension.tabs.create({url: thisLinkURL, focused: focus});
-				var passBack = {
-					msgType: 'openLinkInNewTab',
-					data: { status: 'success' }
-				}
-				event.source.postMessage(passBack);
+				// Get the selected tab so we can get the index of it.  This allows us to open our new tab as the "next" tab.
+				var newIndex = sender.tab.index+1;
+				chrome.tabs.create({url: thisLinkURL, selected: focus, index: newIndex, openerTabId: sender.tab.id});
+				sendResponse({status: "success"});
 				break;
 			case 'compareVersion':
 				var xhr = new XMLHttpRequest();
 				xhr.open("GET", request.url, true);
 				xhr.onreadystatechange = function() {
-				  if (xhr.readyState == 4) {
-					var resp = JSON.parse(xhr.responseText);
-					if (request.forceUpdate) resp.forceUpdate = request.forceUpdate;
-					var passBack = {
-						msgType: 'compareVersion',
-						data: resp
+					if (xhr.readyState == 4) {
+						// JSON.parse does not evaluate the attacker's scripts.
+						var resp = JSON.parse(xhr.responseText);
+						sendResponse(resp);
 					}
-					event.source.postMessage(passBack);
-				  }
-				}
+				};
 				xhr.send();
+				return true;
 				break;
 			case 'loadTweet':
 				var xhr = new XMLHttpRequest();
 				xhr.open("GET", request.url, true);
 				xhr.onreadystatechange = function() {
-				  if (xhr.readyState == 4) {
-					var resp = JSON.parse(xhr.responseText);
-					var passBack = {
-						msgType: 'loadTweet',
-						data: resp
+					if (xhr.readyState == 4) {
+						// JSON.parse does not evaluate the attacker's scripts.
+						var resp = JSON.parse(xhr.responseText);
+						sendResponse(resp);
 					}
-					event.source.postMessage(passBack);
-				  }
-				}
+				};
 				xhr.send();
+				return true;
 				break;
 			case 'getLocalStorage':
-				var ls = {};
-				for (var i = 0, len=localStorage.length; i < len; i++){
-					if (localStorage.key(i)) {
-						ls[localStorage.key(i)] = localStorage.getItem(localStorage.key(i));
-					}
-				}
-				var passBack = {
-					msgType: 'getLocalStorage',
-					data: ls
-				}
-				event.source.postMessage(passBack);
+				sendResponse(localStorage);
 				break;
 			case 'saveLocalStorage':
 				for (var key in request.data) {
 					localStorage.setItem(key,request.data[key]);
 				}
 				localStorage.setItem('importedFromForeground',true);
-				var ls = {};
-				for (var i = 0, len=localStorage.length; i < len; i++){
-					if (localStorage.key(i)) {
-						ls[localStorage.key(i)] = localStorage.getItem(localStorage.key(i));
-					}
-				}
-				var passBack = {
-					msgType: 'saveLocalStorage',
-					data: ls
-				}
-				event.source.postMessage(passBack);
+				sendResponse(localStorage);
 				break;
 			case 'localStorage':
 				switch (request.operation) {
 					case 'getItem':
-						var passBack = {
-							msgType: 'localStorage',
-							data: localStorage.getItem(request.itemName)
-						}
-						event.source.postMessage(passBack);
+						sendResponse({status: true, value: localStorage.getItem(request.itemName)});
 						break;
 					case 'removeItem':
 						localStorage.removeItem(request.itemName);
-						var passBack = {
-							msgType: 'localStorage',
-							data: true
-						}
-						event.source.postMessage(passBack);
+						sendResponse({status: true, value: null});
 						break;
 					case 'setItem':
 						localStorage.setItem(request.itemName, request.itemValue);
-						var passBack = {
-							msgType: 'localStorage',
-							data: true
-						}
-						event.source.postMessage(passBack);
-						opera.extension.broadcastMessage({ msgType: 'localStorage', itemName: request.itemName, itemValue: request.itemValue });
+						sendResponse({status: true, value: null});
+						var thisTabID = sender.tab.id;
+						chrome.tabs.query({}, function(tabs){
+							for (var i = 0; i < tabs.length; i++) {
+								if (thisTabID != tabs[i].id) {
+									chrome.tabs.sendMessage(tabs[i].id, { requestType: "localStorage", itemName: request.itemName, itemValue: request.itemValue });
+								}
+							}
+						});
 						break;
 				}
+				break;
+			case 'addURLToHistory':
+				chrome.history.addUrl({url: request.url});
 				break;
 			case 'XHRCache':
 				switch (request.operation) {
@@ -288,26 +237,9 @@ opera.extension.addEventListener( "message", function( event ) {
 						break;
 				}
 				break;
-			case 'addURLToHistory':
-				var thisWin = opera.extension.windows.getLastFocused();
-				var priv = thisWin.private;
-				var passBack = {
-					msgType: 'addURLToHistory',
-					data: { 
-						url: request.url,
-						isPrivate: priv
-					}
-				}
-				event.source.postMessage(passBack);
-				break;
 			default:
-				var passBack = {
-					msgType: '',
-					data: { status: 'unrecognized request type' }
-				}
-				event.source.postMessage(passBack);
+				sendResponse({status: "unrecognized request type"});
 				break;
 		}
 	}
-}, false);
-</script>
+);
